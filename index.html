@@ -57,17 +57,6 @@
   }
   #refresh:active{background:#1d2942}
 
-  /* ---------- tape ---------- */
-  .tape{display:flex;gap:6px;overflow-x:auto;padding:10px 14px 2px;scrollbar-width:none}
-  .tape::-webkit-scrollbar{display:none}
-  .tile{
-    flex:0 0 auto;min-width:82px;background:var(--deck);border:1px solid var(--line);
-    border-radius:10px;padding:7px 9px;border-left:2px solid var(--dim);
-  }
-  .tile b{display:block;font-size:11px;letter-spacing:.08em;color:var(--muted)}
-  .tile .p{display:block;font-size:13px;margin-top:2px}
-  .tile .ch{font-size:10px}
-  .up{color:var(--long)}.down{color:var(--short)}
 
   /* ---------- controls ---------- */
   .bar{display:flex;gap:6px;align-items:center;padding:10px 14px 0;flex-wrap:wrap}
@@ -93,7 +82,20 @@
   .grid .full{grid-column:1/-1}
 
   /* ---------- cards ---------- */
-  main{padding:12px 14px 0;display:flex;flex-direction:column;gap:9px}
+  main{padding:6px 14px 0;display:flex;flex-direction:column;gap:4px}
+  .grp{display:flex;flex-direction:column;gap:7px;margin-top:12px}
+  .ghead{display:flex;align-items:baseline;gap:9px;padding:0 3px 2px}
+  .gsym{font-size:17px;font-weight:800;letter-spacing:.03em}
+  .gprice{font-size:12px;color:var(--muted)}
+  .gbest{margin-left:auto;font-size:10.5px;color:var(--muted);letter-spacing:.03em;text-transform:uppercase}
+  .gbest b{color:var(--ink)}
+  .gbest.zone,.gbest.near{color:var(--zone)}
+  .gbest.triggered{color:var(--long)}
+  .gdist{font-size:12px;color:var(--muted);min-width:46px;text-align:right}
+  .gdist.hot{color:var(--zone);font-weight:700}
+  .card.next{box-shadow:inset 2px 0 0 var(--zone)}
+  .nextlab{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--zone);
+    background:rgba(255,176,32,.13);border-radius:5px;padding:2px 5px;text-transform:uppercase}
   .card{
     background:var(--deck);border:1px solid var(--line);border-radius:14px;
     padding:11px 12px;display:flex;gap:12px;overflow:hidden;position:relative;
@@ -187,8 +189,6 @@
   </div>
 </header>
 
-<div class="tape" id="tape"></div>
-
 <div class="bar" id="tfbar"></div>
 <div class="bar">
   <button class="chip long" data-dir="long">Long</button>
@@ -281,7 +281,7 @@
 /* ============================================================
    Konfiguration
    ============================================================ */
-const VERSION = 'v10 · 02.09.';
+const VERSION = 'v11 · 02.09.';
 
 const SYMBOLS = [
   {s:'BTCUSDT', n:'BTC'},
@@ -290,9 +290,9 @@ const SYMBOLS = [
   {s:'SOLUSDT', n:'SOL'},
   {s:'XRPUSDT', n:'XRP'}
 ];
-const ALL_TF = ['15m','30m','1h','4h'];
-const BYBIT_TF = {'15m':'15','30m':'30','1h':'60','4h':'240'};
-const OKX_TF   = {'15m':'15m','30m':'30m','1h':'1H','4h':'4H'};
+const ALL_TF = ['15m','1h','4h'];
+const BYBIT_TF = {'15m':'15','1h':'60','4h':'240'};
+const OKX_TF   = {'15m':'15m','1h':'1H','4h':'4H'};
 
 const S = {
   tfs:['15m','1h','4h'],
@@ -320,7 +320,6 @@ loadWatch();
 
 let DATA = [];        // Analyse-Ergebnisse
 let CACHE = {};       // Kerzen je Symbol|TF – Einstellungen rechnen daraus neu
-let TAPE = {};        // Übersicht je Symbol
 let openCards = new Set();
 let timer = null, loading = false;
 
@@ -694,7 +693,6 @@ async function scan(){
 
   DATA = results;
   crossLink();
-  buildTape();
   const t = new Date();
   setStatus(errors.length ? 'err' : 'ok',
     'Stand ' + t.toLocaleTimeString('de-DE') + ' · ' + (SRC ? SRC.id : '?') +
@@ -712,15 +710,6 @@ function crossLink(){
       .filter(y => y.sym === x.sym && y.tf !== x.tf && y.divs)
       .flatMap(y => y.divs.filter(d => d.side === x.dir && d.age <= 12)
                           .map(d => Object.assign({}, d, {tf:y.tf, inRetr:true})));
-  }
-}
-
-function buildTape(){
-  TAPE = {};
-  for(const sym of SYMBOLS){
-    const rows = DATA.filter(r => r.sym === sym.s);
-    if(!rows.length) continue;
-    TAPE[sym.s] = {name:sym.n, price:rows[0].price, best:rows.slice().sort((a,b)=>rank(a)-rank(b))[0]};
   }
 }
 
@@ -792,7 +781,6 @@ function rank(x){
    ============================================================ */
 function dec(p){ return p >= 1000 ? 1 : p >= 100 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.1 ? 5 : 6; }
 function f(p){ return p==null||isNaN(p) ? '–' : p.toLocaleString('de-DE',{minimumFractionDigits:dec(p), maximumFractionDigits:dec(p)}); }
-function pct(x, d=2){ return (x>0?'+':'') + x.toFixed(d) + ' %'; }
 
 function setStatus(kind, txt){
   document.getElementById('dot').className = 'dot ' + (kind==='ok'?'':kind);
@@ -979,7 +967,7 @@ function divTag(d){
   return `<span class="tag ${dir}">${tf}${d.osc} ${d.hidden?'hidden':'reg'} ${arrow} · vor ${d.age} Bars</span>`;
 }
 
-function card(x, id){
+function card(x, id, isNext){
   if(x.status === 'none'){
     return `<div class="card idle"><div class="body">
       <div class="top"><span class="sym">${x.name}</span><span class="tf">${x.tf}</span>
@@ -993,12 +981,12 @@ function card(x, id){
   const open = openCards.has(id) ? ' open' : '';
   const watched = WATCH.has(id);
 
-  return `<div class="card ${x.status}${open}${watched?' watched':''}" data-id="${id}">
+  return `<div class="card ${x.status}${open}${watched?' watched':''}${isNext?' next':''}" data-id="${id}">
     ${gauge(x)}
     <div class="body">
       <div class="top">
         <span class="sym">${x.name}</span>
-        <span class="tf">${x.tf}</span>
+        <span class="tf">${x.tf}</span>${isNext?'<span class="nextlab">nächstes</span>':''}
         <span class="side ${x.dir}">${x.dir==='long'?'LONG':'SHORT'}</span>
         <span class="pill ${x.status}">${LABEL[x.status]}</span>
         <a class="tvbtn" href="${tvHref(x.sym)}">TV</a>
@@ -1016,7 +1004,6 @@ function card(x, id){
         ${(x.conf.length || (x.mtf||[]).length) ? '<span class="tag '+(x.dir==='long'?'bull':'bear')+'">KONFLUENZ'+((x.mtf||[]).length?' MTF':'')+'</span>' : ''}
         ${x.divs.map(divTag).join('')}
         ${(x.mtf||[]).map(divTag).join('')}
-        ${x.divs.length===0 && !(x.mtf||[]).length ? '<span class="tag">keine Divergenz</span>' : ''}
       </div>
       <div class="detail">
         <table>
@@ -1036,31 +1023,41 @@ function card(x, id){
 }
 
 function render(){
-  // Tape
-  document.getElementById('tape').innerHTML = SYMBOLS.map(s=>{
-    const t = TAPE[s.s];
-    if(!t) return '';
-    const b = t.best;
-    const col = b.status==='zone' ? 'var(--zone)' : b.dir==='long' ? 'var(--long)' : b.dir==='short' ? 'var(--short)' : 'var(--dim)';
-    return `<div class="tile" style="border-left-color:${col}">
-      <b>${s.n}</b><span class="p num">${f(t.price)}</span>
-      <span class="ch num" style="color:${col}">${b.status==='none'?'–':LABEL[b.status]+' '+b.tf}</span>
-    </div>`;
-  }).join('');
-
   let rows = DATA.filter(x => x.status==='none' ? false : S.dirs[x.dir]);
   if(S.watchOnly) rows = rows.filter(x => WATCH.has(x.sym+'-'+x.tf));
-  if(S.only) rows = rows.filter(x => x.status==='zone' || x.status==='near');
-  rows.sort(S.sort==='near'
-    ? (a,b)=>rank(a)-rank(b)
-    : (a,b)=>(b.conf.length-a.conf.length) || (rank(a)-rank(b)));
+  if(S.only) rows = rows.filter(x => x.status==='zone' || x.status==='triggered' || x.status==='near');
+
+  const confN = x => (x.conf ? x.conf.length : 0) + (x.mtf ? x.mtf.length : 0);
+  const cmp = S.sort === 'near'
+    ? (a,b) => rank(a) - rank(b)
+    : (a,b) => (confN(b) - confN(a)) || (rank(a) - rank(b));
+
+  // Nach Paar gruppieren, bestes Setup je Paar nach oben
+  const groups = [];
+  for(const sy of SYMBOLS){
+    const rs = rows.filter(r => r.sym === sy.s).sort(cmp);
+    if(rs.length) groups.push({sy, rows:rs, best:rs[0]});
+  }
+  groups.sort((a,b) => cmp(a.best, b.best));
 
   const out = document.getElementById('out');
-  out.innerHTML = rows.length
-    ? rows.map(x => card(x, x.sym+'-'+x.tf)).join('')
-    : '<div class="empty">Kein Setup im Filter.<br>Filter lockern oder auf den nächsten Rücklauf warten.</div>';
+  out.innerHTML = groups.length ? groups.map(g => {
+    const b = g.best;
+    const near = b.status === 'zone' || b.status === 'triggered' || b.status === 'near';
+    return `<section class="grp">
+      <div class="ghead">
+        <span class="gsym">${g.sy.n}</span>
+        <span class="gprice num">${f(b.price)}</span>
+        <span class="gbest ${b.status}">
+          <b>${b.tf}</b> ${b.dir === 'long' ? 'LONG' : 'SHORT'} · ${LABEL[b.status]}
+        </span>
+        <span class="gdist num ${near ? 'hot' : ''}">${b.absDist.toFixed(2)}%</span>
+      </div>
+      ${g.rows.map((x,i) => card(x, x.sym+'-'+x.tf, i === 0 && g.rows.length > 1)).join('')}
+    </section>`;
+  }).join('') : '<div class="empty">Kein Setup im Filter.<br>Filter lockern oder auf den nächsten Rücklauf warten.</div>';
 
-  const nz = DATA.filter(x=>x.status==='zone').length;
+  const nz = DATA.filter(x => x.status === 'zone' || x.status === 'triggered').length;
   document.title = (nz ? `(${nz}) ` : '') + 'Discount Scanner';
 }
 
@@ -1209,7 +1206,6 @@ function reanalyze(){
     return analyze(sym, meta.n, tf, CACHE[k]);
   });
   crossLink();
-  buildTape();
   render();
 }
 function startTimer(){
