@@ -164,6 +164,16 @@
 
   .empty,.note{color:var(--muted);font-size:12px;text-align:center;padding:22px 24px;line-height:1.6}
   footer{padding:18px 20px 0;color:#4a5670;font-size:10.5px;text-align:center;line-height:1.7}
+  #ovl{position:fixed;inset:0;z-index:80;background:var(--abyss);display:none;flex-direction:column}
+  #ovl.on{display:flex}
+  .ovlbar{display:flex;align-items:center;gap:9px;padding:calc(9px + env(safe-area-inset-top)) 13px 9px;
+    border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+  .ovlbar button{background:var(--deck2);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;font-family:var(--sans)}
+  .ovlbar .sp{margin-left:auto}
+  #tvbox{flex:1;min-height:0}
+  #tvbox .tradingview-widget-container,#tvbox iframe{height:100%!important;width:100%!important}
+  .chartholder:empty{display:none}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -273,6 +283,15 @@
   <noscript><div class="note">Dieses Tool braucht JavaScript.</div></noscript>
 </main>
 
+<div id="ovl">
+  <div class="ovlbar">
+    <span id="ovltitle">Chart</span>
+    <button class="sp" id="ovlapp">TV-App</button>
+    <button id="ovlclose">Schließen</button>
+  </div>
+  <div id="tvbox"></div>
+</div>
+
 <footer>
   Daten: Binance USDⓈ-M Futures (Fallback Bybit, OKX) · Struktur per ZigZag,
   Schwelle = ATR×Faktor bzw. Mindest-Swing · keine Anlageberatung.
@@ -282,7 +301,7 @@
 /* ============================================================
    Konfiguration
    ============================================================ */
-const VERSION = 'v6 · 02.09.';
+const VERSION = 'v7 · 02.09.';
 
 const SYMBOLS = [
   {s:'BTCUSDT', n:'BTC'},
@@ -616,7 +635,11 @@ function analyze(sym, name, tf, c){
   const legPct = range/price*100;
   const legBars = Math.abs(B.i - A.i);
   const endAge = (c.length-1) - B.i;
-  base.plot = c.slice(Math.max(0, Math.min(A.i, B.i) - 8)).map(k=>k.c);
+  const from = Math.max(0, Math.min(A.i, B.i) - 8);
+  base.plot = c.slice(from).map(k=>k.c);
+  base.pc   = c.slice(from).map(k=>({o:k.o, h:k.h, l:k.l, c:k.c}));
+  base.ai   = A.i - from;
+  base.bi   = B.i - from;
 
   const fib = x => dir==='long' ? B.p - x*range : B.p + x*range;
   const r = dir==='long' ? (B.p - price)/range : (price - B.p)/range;
@@ -831,40 +854,90 @@ function gauge(x){
 }
 
 function spark(x){
-  const p = x.plot && x.plot.length > 4 ? x.plot : x.closes;
-  if(!p || p.length < 4) return '';
-  const W = 320, H = 120, R = 44, PL = 2, PT = 8, PB = 8;   // R = Platz für Labels rechts
-  const lvls = [
-    {v:x.fib(0),     t:'0',      c:'#33456a', d:0},
-    {v:x.fib(0.5),   t:'0.5',    c:'#33456a', d:1},
-    {v:x.fib(0.786), t:'0.786',  c:'#8a7b3f', d:1},
-    {v:x.entry,      t:'0.882',  c:'var(--zone)', d:0},
-    {v:x.fib(1),     t:'1.0',    c:'#33456a', d:1},
-    {v:x.stop,       t:'Stop',   c:'var(--short)', d:1}
-  ];
-  const vals = p.concat(lvls.map(l=>l.v));
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = (hi-lo)*0.06 || 1; lo -= pad; hi += pad;
-  const y = v => PT + (H-PT-PB) * (1 - (v-lo)/(hi-lo));
-  const xs = i => PL + (W-R-PL) * (i/(p.length-1));
+  let bars = x.pc || [];
+  if(bars.length < 4) return '';
+  const W = 320, H = 152, R = 46, PL = 2, PT = 8, PB = 8;
+  let ai = x.ai, bi = x.bi;
 
-  const zTop = y(x.entry), zBot = y(x.fib(0.786));
-  const col = x.dir==='long' ? 'var(--long)' : 'var(--short)';
+  // Zu viele Bars? Zu Buckets zusammenfassen, sonst sind die Kerzen Striche
+  const MAXB = 80;
+  if(bars.length > MAXB){
+    const fct = Math.ceil(bars.length / MAXB), agg = [];
+    for(let i=0;i<bars.length;i+=fct){
+      const seg = bars.slice(i, i+fct);
+      agg.push({o:seg[0].o, c:seg[seg.length-1].c,
+                h:Math.max.apply(null, seg.map(k=>k.h)),
+                l:Math.min.apply(null, seg.map(k=>k.l))});
+    }
+    bars = agg; ai = Math.floor(ai/fct); bi = Math.floor(bi/fct);
+  }
+
+  const lvls = [
+    {v:x.fib(0),     t:'0',     c:'#33456a', d:1},
+    {v:x.fib(0.5),   t:'0.5',   c:'#33456a', d:1},
+    {v:x.fib(0.786), t:'0.786', c:'#8a7b3f', d:1},
+    {v:x.entry,      t:'0.882', c:'var(--zone)', d:0},
+    {v:x.fib(1),     t:'1.0',   c:'#33456a', d:1},
+    {v:x.stop,       t:'Stop',  c:'var(--short)', d:1}
+  ];
+  let lo = Math.min.apply(null, bars.map(k=>k.l).concat(lvls.map(l=>l.v)));
+  let hi = Math.max.apply(null, bars.map(k=>k.h).concat(lvls.map(l=>l.v)));
+  const pad = (hi-lo)*0.05 || 1; lo -= pad; hi += pad;
+  const y  = v => PT + (H-PT-PB) * (1 - (v-lo)/(hi-lo));
+  const cw = (W-R-PL) / bars.length;
+  const cx = i => PL + cw*i + cw/2;
+
+  const ax = cx(Math.max(0, Math.min(ai, bars.length-1)));
+  const bx = cx(Math.max(0, Math.min(bi, bars.length-1)));
+  const ay = y(x.A.p), by = y(x.B.p);
+  const legFrom = Math.min(ax, bx);
+
   let s = `<svg class="spark" viewBox="0 0 ${W} ${H}">`;
-  s += `<rect x="${PL}" y="${Math.min(zTop,zBot)}" width="${W-R-PL}" height="${Math.abs(zBot-zTop)}"
-         fill="var(--zone)" opacity=".13"/>`;
+
+  // Entry-Zone als Band
+  const zA = y(x.entry), zB = y(x.fib(0.786));
+  s += `<rect x="${legFrom}" y="${Math.min(zA,zB)}" width="${W-R-legFrom}" height="${Math.abs(zB-zA)}"
+         fill="var(--zone)" opacity=".12"/>`;
+  // Fib-Level ab Leg-Start nach rechts
   for(const l of lvls){
-    s += `<line x1="${PL}" y1="${y(l.v).toFixed(1)}" x2="${W-R}" y2="${y(l.v).toFixed(1)}"
+    s += `<line x1="${legFrom.toFixed(1)}" y1="${y(l.v).toFixed(1)}" x2="${W-R}" y2="${y(l.v).toFixed(1)}"
            stroke="${l.c}" stroke-width="1" ${l.d?'stroke-dasharray="3 3"':''}/>`;
   }
-  s += `<polyline points="${p.map((v,i)=>xs(i).toFixed(1)+','+y(v).toFixed(1)).join(' ')}"
-         fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;
-  const cx = xs(p.length-1), cy = y(p[p.length-1]);
-  s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="var(--ink)"/>`;
 
-  // Labels vertikal entzerren, damit sich Level und "jetzt" nicht überschreiben
+  // Kerzen
+  const bw = Math.max(1, Math.min(6, cw*0.62));
+  for(let i=0;i<bars.length;i++){
+    const k = bars[i], up = k.c >= k.o;
+    const col = up ? 'var(--long)' : 'var(--short)';
+    const xx = cx(i);
+    s += `<line x1="${xx.toFixed(1)}" y1="${y(k.h).toFixed(1)}" x2="${xx.toFixed(1)}" y2="${y(k.l).toFixed(1)}"
+           stroke="${col}" stroke-width=".8" opacity=".85"/>`;
+    const yo = y(k.o), yc = y(k.c);
+    s += `<rect x="${(xx-bw/2).toFixed(1)}" y="${Math.min(yo,yc).toFixed(1)}" width="${bw.toFixed(1)}"
+           height="${Math.max(0.8, Math.abs(yc-yo)).toFixed(1)}" fill="${col}" opacity=".9"/>`;
+  }
+
+  // Das Leg selbst: A → B
+  s += `<line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
+         stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="4 3" opacity=".65"/>`;
+  const mark = (px, py, lab, sub) => {
+    const above = lab === 'B' ? (x.dir === 'long') : (x.dir !== 'long');
+    const ty = above ? py - 8 : py + 13;
+    return `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.4" fill="var(--abyss)"
+              stroke="var(--ink)" stroke-width="1.4"/>
+            <text x="${px.toFixed(1)}" y="${ty.toFixed(1)}" font-size="9" fill="var(--ink)"
+              text-anchor="middle" font-family="ui-monospace,monospace">${lab} ${sub}</text>`;
+  };
+  s += mark(ax, ay, 'A', '1.0');
+  s += mark(bx, by, 'B', '0');
+
+  // Aktueller Preis
+  const px = cx(bars.length-1), py = y(bars[bars.length-1].c);
+  s += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="var(--ink)"/>`;
+
+  // Labels rechts entzerren
   const labs = lvls.map(l => ({t:l.t, y:y(l.v), c:l.c==='#33456a' ? '#6b7a92' : l.c}))
-                   .concat([{t:'jetzt', y:cy, c:'var(--ink)'}])
+                   .concat([{t:'jetzt', y:py, c:'var(--ink)'}])
                    .sort((a,b)=>a.y-b.y);
   const GAP = 10;
   for(let i=1;i<labs.length;i++) if(labs[i].y - labs[i-1].y < GAP) labs[i].y = labs[i-1].y + GAP;
@@ -874,15 +947,9 @@ function spark(x){
     s += `<text x="${W-R+4}" y="${(l.y+3).toFixed(1)}" font-size="8.5" fill="${l.c}"
            font-family="ui-monospace,monospace">${l.t}</text>`;
   }
-  s += `</svg><div class="sparkcap">Verlauf ab Leg-Start · ${p.length} Bars ${x.tf}</div>`;
-  return s;
-}
 
-function tvHref(sym){
-  const q = encodeURIComponent('BINANCE:' + sym + '.P');
-  return S.tv === 'app'
-    ? 'tradingview://chart?symbol=' + q
-    : 'https://www.tradingview.com/chart/?symbol=' + q;
+  s += `</svg><div class="sparkcap">A = Leg-Start (1.0) · B = Leg-Ende (0) · ${bars.length} Kerzen ${x.tf}</div>`;
+  return s;
 }
 
 function divTag(d){
@@ -948,10 +1015,10 @@ function card(x, id){
           <tr><td>nötiger Hebel</td><td${lev>10?' style="color:var(--short)"':''}>${lev.toFixed(1)}x</td></tr>
           <tr><td>Stop-Distanz</td><td>${riskPct.toFixed(2)}% vom Entry</td></tr>
         </table>
-        ${spark(x)}
+        <div class="chartholder">${open ? spark(x) : ''}</div>
         <div class="acts">
-          <a href="${tvHref(x.sym)}">Chart</a>
-          <button class="copy" data-id="${id}">Setup kopieren</button>
+          <button class="tvopen" data-tv="${id}">Chart</button>
+          <button class="copy" data-id="${id}">Kopieren</button>
         </div>
       </div>
     </div>
@@ -990,6 +1057,41 @@ function render(){
 /* ============================================================
    Interaktion
    ============================================================ */
+let ovlSym = null;
+function openChart(x){
+  ovlSym = x;
+  document.getElementById('ovltitle').textContent = `${x.name} · ${x.tf} · ${x.dir==='long'?'LONG':'SHORT'}`;
+  document.getElementById('ovl').classList.add('on');
+  const box = document.getElementById('tvbox');
+  box.innerHTML = '<div class="note">lade TradingView …</div>';
+  const wrap = document.createElement('div');
+  wrap.className = 'tradingview-widget-container';
+  const inner = document.createElement('div');
+  inner.className = 'tradingview-widget-container__widget';
+  wrap.appendChild(inner);
+  const sc = document.createElement('script');
+  sc.type = 'text/javascript';
+  sc.async = true;
+  sc.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  sc.innerHTML = JSON.stringify({
+    symbol: 'BINANCE:' + x.sym + '.P',
+    interval: ({'15m':'15','30m':'30','1h':'60','4h':'240'})[x.tf] || '60',
+    theme: 'dark', style: '1', locale: 'de_DE',
+    autosize: true, hide_side_toolbar: false, allow_symbol_change: true,
+    backgroundColor: '#070b14'
+  });
+  sc.onerror = () => {
+    box.innerHTML = '<div class="note">TradingView lädt nicht (Netz oder Blocker).<br>' +
+      '<a href="' + tvHref(x.sym) + '" style="color:var(--zone)">im Browser öffnen</a></div>';
+  };
+  setTimeout(() => { box.innerHTML = ''; box.appendChild(wrap); wrap.appendChild(sc); }, 40);
+}
+function closeChart(){
+  document.getElementById('ovl').classList.remove('on');
+  document.getElementById('tvbox').innerHTML = '';
+  ovlSym = null;
+}
+
 function buildTFBar(){
   document.getElementById('tfbar').innerHTML = ALL_TF.map(tf =>
     `<button class="chip tf-chip${S.tfs.includes(tf)?' on':''}" data-tf="${tf}">${tf}</button>`).join('');
@@ -1051,6 +1153,18 @@ document.addEventListener('click', e => {
   const ax = e.target.closest('[data-alarm]');
   if(ax){ ALARMS.splice(+ax.dataset.alarm, 1); renderAlarms(); return; }
 
+  if(e.target.id === 'ovlclose'){ closeChart(); return; }
+  if(e.target.id === 'ovlapp'){
+    if(ovlSym) location.href = 'tradingview://chart?symbol=' + encodeURIComponent('BINANCE:'+ovlSym.sym+'.P');
+    return;
+  }
+  const tvb = e.target.closest('[data-tv]');
+  if(tvb){
+    const x = DATA.find(d => d.sym+'-'+d.tf === tvb.dataset.tv);
+    if(x) openChart(x);
+    return;
+  }
+
   const cp = e.target.closest('.copy');
   if(cp){
     const x = DATA.find(d => d.sym+'-'+d.tf === cp.dataset.id);
@@ -1062,6 +1176,11 @@ document.addEventListener('click', e => {
     const id = c.dataset.id;
     if(openCards.has(id)) openCards.delete(id); else openCards.add(id);
     c.classList.toggle('open');
+    const hold = c.querySelector('.chartholder');
+    if(hold && !hold.innerHTML && c.classList.contains('open')){
+      const x = DATA.find(d => d.sym+'-'+d.tf === id);
+      if(x) hold.innerHTML = spark(x);
+    }
   }
 });
 
