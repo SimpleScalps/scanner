@@ -156,7 +156,6 @@
   td:first-child{color:var(--muted);font-size:11.5px}
   td:last-child{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
   .spark{width:100%;height:auto;display:block;margin-top:11px}
-  .sparkcap{font-size:10px;color:var(--muted);text-align:center;margin-top:5px}
   .chartholder{touch-action:none;user-select:none;-webkit-user-select:none}
   .chartctl{display:flex;gap:5px;margin-top:7px}
   .chartctl button{flex:1;background:var(--deck2);border:1px solid var(--line);color:var(--ink);
@@ -256,14 +255,6 @@
         <option value="300">5 min</option>
       </select>
     </div>
-    <div>
-      <label>Kontogröße (USDT)</label>
-      <input type="number" id="acc" step="100" min="0" value="5000">
-    </div>
-    <div>
-      <label>Risiko pro Trade (%)</label>
-      <input type="number" id="risk" step="0.1" min="0.1" value="1">
-    </div>
     <div class="full">
       <label>Datenquellen</label>
       <button class="chip" id="diagBtn" style="width:100%;border-radius:8px;padding:9px">Verbindung testen</button>
@@ -290,7 +281,7 @@
 /* ============================================================
    Konfiguration
    ============================================================ */
-const VERSION = 'v9 · 02.09.';
+const VERSION = 'v10 · 02.09.';
 
 const SYMBOLS = [
   {s:'BTCUSDT', n:'BTC'},
@@ -307,7 +298,7 @@ const S = {
   tfs:['15m','1h','4h'],
   dirs:{long:true, short:true},
   tol:0.35, buf:5, zzAtr:3, divPiv:3, minSwing:0.5, alarmLvl:0.786, lookback:200, staleF:3,
-  mode:'single', auto:60, acc:5000, risk:1,
+  mode:'single', auto:60,
   only:false, watchOnly:false, sound:false, sort:'near', tv:'web'
 };
 
@@ -580,7 +571,7 @@ function analyze(sym, name, tf, c){
   const dp = Math.max(2, Math.round(S.divPiv));
   const divs = divergences(c, rsi(c), 'RSI', dp).concat(divergences(c, mfi(c), 'MFI', dp));
   const pts = swingPoints(c);
-  const base = {sym, name, tf, price, divs, closes:c.slice(-70).map(k=>k.c)};
+  const base = {sym, name, tf, price, divs};
   if(pts.length < 2) return Object.assign(base, {status:'none'});
 
   // Welches Bein trägt die Fibs? Unter den letzten Beinen das größte, das
@@ -624,7 +615,6 @@ function analyze(sym, name, tf, c){
   const legPct = range/price*100;
   const legBars = Math.abs(B.i - A.i);
   const endAge = (c.length-1) - B.i;
-  base.pc   = c.map(k=>({o:k.o, h:k.h, l:k.l, c:k.c}));   // ganze Historie, damit man zurückscrollen kann
   base.ai   = A.i;
   base.bi   = B.i;
   base.vi0  = Math.max(0, Math.min(A.i, B.i) - 10);       // Standardausschnitt: Leg + Rücklauf
@@ -801,7 +791,6 @@ function rank(x){
    Rendering
    ============================================================ */
 function dec(p){ return p >= 1000 ? 1 : p >= 100 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.1 ? 5 : 6; }
-function qty(v){ return v >= 1000 ? v.toFixed(0) : v >= 10 ? v.toFixed(2) : v.toFixed(4); }
 function f(p){ return p==null||isNaN(p) ? '–' : p.toLocaleString('de-DE',{minimumFractionDigits:dec(p), maximumFractionDigits:dec(p)}); }
 function pct(x, d=2){ return (x>0?'+':'') + x.toFixed(d) + ' %'; }
 
@@ -845,7 +834,7 @@ function gauge(x){
 const VIEWS = {};                       // id -> {i0, n} Ausschnitt je Karte
 
 function spark(x, id){
-  const all = x.pc || [];
+  const all = CACHE[x.sym+'|'+x.tf] || [];
   if(all.length < 4) return '';
   if(!VIEWS[id]) VIEWS[id] = {i0:x.vi0 || 0, n:all.length - (x.vi0 || 0)};
   const v = VIEWS[id];
@@ -940,8 +929,7 @@ function spark(x, id){
       <button data-cv="out" data-id="${id}">−</button>
       <button data-cv="in" data-id="${id}">+</button>
       <button data-cv="reset" data-id="${id}">Reset</button>
-    </div>
-    <div class="sparkcap">A = Leg-Start (1.0) · B = Leg-Ende (0) · Bars ${v.i0+1}–${v.i0+v.n} von ${all.length}${fct>1?' · je '+fct+' zusammengefasst':''}</div>`;
+    </div>`;
   return out;
 }
 
@@ -1000,10 +988,7 @@ function card(x, id){
       ${x.divs.length ? '<div class="tags">'+x.divs.map(divTag).join('')+'</div>' : ''}
     </div></div>`;
   }
-  const size = (S.acc * S.risk/100) / (x.risk || 1);
-  const notional = size * x.entry;
   const riskPct = x.risk / x.entry * 100;
-  const lev = notional / (S.acc || 1);
   const arrow = x.distPct > 0 ? '↑' : '↓';
   const open = openCards.has(id) ? ' open' : '';
   const watched = WATCH.has(id);
@@ -1026,7 +1011,6 @@ function card(x, id){
         <div><span class="lbl">Abstand</span><span class="num big">${arrow} ${x.absDist.toFixed(2)}%</span></div>
         <div><span class="lbl">Retr.</span><span class="num">${(x.r*100).toFixed(1)}%</span></div>
         <div><span class="lbl">Leg</span><span class="num">${x.legPct.toFixed(2)}%</span></div>
-        <div><span class="lbl">Risiko</span><span class="num"${riskPct<0.15?' style="color:var(--short)"':''}>${riskPct.toFixed(2)}%</span></div>
       </div>
       <div class="tags">
         ${(x.conf.length || (x.mtf||[]).length) ? '<span class="tag '+(x.dir==='long'?'bull':'bear')+'">KONFLUENZ'+((x.mtf||[]).length?' MTF':'')+'</span>' : ''}
@@ -1038,12 +1022,9 @@ function card(x, id){
         <table>
           <tr><td>Leg (${x.dir==='long'?'Tief → Hoch':'Hoch → Tief'}) · ${x.legBars} Bars</td><td>${f(x.A.p)} → ${f(x.B.p)}</td></tr>
           <tr><td>tiefstes Retracement bisher</td><td>${(x.deep*100).toFixed(1)}%</td></tr>
-          ${x.entries.map(e=>`<tr><td>Entry ${e.toFixed(3)}</td><td>${f(x.fib(e))}</td></tr>`).join('')}
-          <tr><td>Stop (${x.invalidLvl} +${S.buf}%)</td><td style="color:var(--short)">${f(x.stop)}</td></tr>
-          <tr><td>Risiko je Coin</td><td>${f(x.risk)}</td></tr>
+          ${x.entries.length>1 ? x.entries.map(e=>`<tr><td>Entry ${e.toFixed(3)}</td><td>${f(x.fib(e))}</td></tr>`).join('') : ''}
+          <tr><td>Stop (${x.invalidLvl} +${S.buf}%)</td><td style="color:var(--short)">${f(x.stop)} · ${riskPct.toFixed(2)}%</td></tr>
           ${x.tgts.map(t=>`<tr><td>${t.l}</td><td>${f(t.p)} · RR ${t.rr.toFixed(1)}</td></tr>`).join('')}
-          <tr><td>Größe bei ${S.risk}% von ${S.acc}</td><td>${qty(size)} ${x.name} · ${notional.toFixed(0)} USDT</td></tr>
-          <tr><td>Stop-Distanz</td><td>${riskPct.toFixed(2)}% vom Entry</td></tr>
         </table>
         <div class="chartholder">${open ? spark(x, id) : ''}</div>
         <div class="acts">
@@ -1157,7 +1138,7 @@ document.addEventListener('click', e => {
       if(cv.dataset.cv === 'right') v.i0 += step;
       if(cv.dataset.cv === 'in')    { v.i0 += v.n*0.2; v.n *= 0.6; }
       if(cv.dataset.cv === 'out')   { v.i0 -= v.n*0.33; v.n /= 0.6; }
-      if(cv.dataset.cv === 'reset') { v.i0 = x.vi0 || 0; v.n = (x.pc||[]).length - (x.vi0 || 0); }
+      if(cv.dataset.cv === 'reset') { const L=(CACHE[x.sym+'|'+x.tf]||[]).length; v.i0 = x.vi0 || 0; v.n = L - (x.vi0 || 0); }
       redrawChart(id);
     }
     return;
@@ -1207,7 +1188,7 @@ function copySetup(x, btn){
 }
 
 const inputs = {tol:'tol', buf:'buf', zzatr:'zzAtr', divpiv:'divPiv', minsw:'minSwing',
-                stalef:'staleF', alarmlvl:'alarmLvl', acc:'acc', risk:'risk'};
+                stalef:'staleF', alarmlvl:'alarmLvl'};
 Object.entries(inputs).forEach(([id, key]) => {
   document.getElementById(id).addEventListener('change', e => {
     const v = parseFloat(e.target.value);
