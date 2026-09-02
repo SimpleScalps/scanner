@@ -154,7 +154,12 @@
   td:first-child{color:var(--muted);font-size:11.5px}
   td:last-child{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
   .spark{width:100%;height:auto;display:block;margin-top:11px}
-  .sparkcap{font-size:10px;color:var(--muted);text-align:center;margin-top:3px}
+  .sparkcap{font-size:10px;color:var(--muted);text-align:center;margin-top:5px}
+  .chartholder{touch-action:none;user-select:none;-webkit-user-select:none}
+  .chartctl{display:flex;gap:5px;margin-top:7px}
+  .chartctl button{flex:1;background:var(--deck2);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:8px 0;font-size:13px;font-weight:600;font-family:var(--sans)}
+  .chartctl button:active{background:#1d2942}
   .acts{display:flex;gap:7px;margin-top:11px}
   .acts a,.acts button{
     flex:1;text-align:center;background:var(--deck2);border:1px solid var(--line);color:var(--ink);
@@ -164,15 +169,6 @@
 
   .empty,.note{color:var(--muted);font-size:12px;text-align:center;padding:22px 24px;line-height:1.6}
   footer{padding:18px 20px 0;color:#4a5670;font-size:10.5px;text-align:center;line-height:1.7}
-  #ovl{position:fixed;inset:0;z-index:80;background:var(--abyss);display:none;flex-direction:column}
-  #ovl.on{display:flex}
-  .ovlbar{display:flex;align-items:center;gap:9px;padding:calc(9px + env(safe-area-inset-top)) 13px 9px;
-    border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
-  .ovlbar button{background:var(--deck2);border:1px solid var(--line);color:var(--ink);
-    border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;font-family:var(--sans)}
-  .ovlbar .sp{margin-left:auto}
-  #tvbox{flex:1;min-height:0}
-  #tvbox .tradingview-widget-container,#tvbox iframe{height:100%!important;width:100%!important}
   .chartholder:empty{display:none}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -283,15 +279,6 @@
   <noscript><div class="note">Dieses Tool braucht JavaScript.</div></noscript>
 </main>
 
-<div id="ovl">
-  <div class="ovlbar">
-    <span id="ovltitle">Chart</span>
-    <button class="sp" id="ovlapp">TV-App</button>
-    <button id="ovlclose">Schließen</button>
-  </div>
-  <div id="tvbox"></div>
-</div>
-
 <footer>
   Daten: Binance USDⓈ-M Futures (Fallback Bybit, OKX) · Struktur per ZigZag,
   Schwelle = ATR×Faktor bzw. Mindest-Swing · keine Anlageberatung.
@@ -301,7 +288,7 @@
 /* ============================================================
    Konfiguration
    ============================================================ */
-const VERSION = 'v7 · 02.09.';
+const VERSION = 'v8 · 02.09.';
 
 const SYMBOLS = [
   {s:'BTCUSDT', n:'BTC'},
@@ -652,9 +639,10 @@ function analyze(sym, name, tf, c){
   const stop = fib(invalidLvl + bufR);
   const risk = Math.abs(entry - stop);
   const tgts = [
-    {l:'T1 · 0.5 (Equilibrium)', p:fib(0.5)},
-    {l:'T2 · 0.236', p:fib(0.236)},
-    {l:'T3 · Swing 0.0', p:fib(0)}
+    {l:'T1 · 0.618', p:fib(0.618)},
+    {l:'T2 · 0.5 (Equilibrium)', p:fib(0.5)},
+    {l:'T3 · 0.236', p:fib(0.236)},
+    {l:'T4 · Swing 0.0', p:fib(0)}
   ].map(t=>Object.assign(t, {rr: risk>0 ? Math.abs(t.p-entry)/risk : 0}));
 
   const distPct = (entry - price)/price*100;      // <0 = Entry liegt unter dem Preis
@@ -853,16 +841,22 @@ function gauge(x){
   return h;
 }
 
-function spark(x){
-  let bars = x.pc || [];
-  if(bars.length < 4) return '';
-  const W = 320, H = 152, R = 46, PL = 2, PT = 8, PB = 8;
-  let ai = x.ai, bi = x.bi;
+const VIEWS = {};                       // id -> {i0, n} Ausschnitt je Karte
 
-  // Zu viele Bars? Zu Buckets zusammenfassen, sonst sind die Kerzen Striche
+function spark(x, id){
+  const all = x.pc || [];
+  if(all.length < 4) return '';
+  if(!VIEWS[id]) VIEWS[id] = {i0:0, n:all.length};
+  const v = VIEWS[id];
+  v.n  = Math.max(15, Math.min(all.length, Math.round(v.n)));
+  v.i0 = Math.max(0, Math.min(all.length - v.n, Math.round(v.i0)));
+
+  let bars = all.slice(v.i0, v.i0 + v.n);
+  let ai = x.ai - v.i0, bi = x.bi - v.i0, fct = 1;
   const MAXB = 80;
   if(bars.length > MAXB){
-    const fct = Math.ceil(bars.length / MAXB), agg = [];
+    fct = Math.ceil(bars.length / MAXB);
+    const agg = [];
     for(let i=0;i<bars.length;i+=fct){
       const seg = bars.slice(i, i+fct);
       agg.push({o:seg[0].o, c:seg[seg.length-1].c,
@@ -872,84 +866,120 @@ function spark(x){
     bars = agg; ai = Math.floor(ai/fct); bi = Math.floor(bi/fct);
   }
 
+  const W = 320, H = 152, R = 46, PL = 2, PT = 8, PB = 8;
   const lvls = [
     {v:x.fib(0),     t:'0',     c:'#33456a', d:1},
     {v:x.fib(0.5),   t:'0.5',   c:'#33456a', d:1},
+    {v:x.fib(0.618), t:'0.618', c:'#4d7f6b', d:1},
     {v:x.fib(0.786), t:'0.786', c:'#8a7b3f', d:1},
     {v:x.entry,      t:'0.882', c:'var(--zone)', d:0},
     {v:x.fib(1),     t:'1.0',   c:'#33456a', d:1},
     {v:x.stop,       t:'Stop',  c:'var(--short)', d:1}
   ];
-  let lo = Math.min.apply(null, bars.map(k=>k.l).concat(lvls.map(l=>l.v)));
-  let hi = Math.max.apply(null, bars.map(k=>k.h).concat(lvls.map(l=>l.v)));
+  // Y-Bereich aus dem sichtbaren Ausschnitt, Entry und Stop immer im Bild
+  let lo = Math.min.apply(null, bars.map(k=>k.l).concat([x.entry, x.stop]));
+  let hi = Math.max.apply(null, bars.map(k=>k.h).concat([x.entry, x.stop]));
   const pad = (hi-lo)*0.05 || 1; lo -= pad; hi += pad;
-  const y  = v => PT + (H-PT-PB) * (1 - (v-lo)/(hi-lo));
+  const y  = t => PT + (H-PT-PB) * (1 - (t-lo)/(hi-lo));
   const cw = (W-R-PL) / bars.length;
   const cx = i => PL + cw*i + cw/2;
+  const vis = i => i >= 0 && i < bars.length;
 
-  const ax = cx(Math.max(0, Math.min(ai, bars.length-1)));
-  const bx = cx(Math.max(0, Math.min(bi, bars.length-1)));
-  const ay = y(x.A.p), by = y(x.B.p);
-  const legFrom = Math.min(ax, bx);
-
-  let s = `<svg class="spark" viewBox="0 0 ${W} ${H}">`;
-
-  // Entry-Zone als Band
+  let out = `<svg class="spark" viewBox="0 0 ${W} ${H}">`;
+  const legFrom = vis(Math.min(ai,bi)) ? cx(Math.min(ai,bi)) : PL;
   const zA = y(x.entry), zB = y(x.fib(0.786));
-  s += `<rect x="${legFrom}" y="${Math.min(zA,zB)}" width="${W-R-legFrom}" height="${Math.abs(zB-zA)}"
-         fill="var(--zone)" opacity=".12"/>`;
-  // Fib-Level ab Leg-Start nach rechts
+  out += `<rect x="${legFrom.toFixed(1)}" y="${Math.min(zA,zB).toFixed(1)}" width="${(W-R-legFrom).toFixed(1)}"
+           height="${Math.abs(zB-zA).toFixed(1)}" fill="var(--zone)" opacity=".12"/>`;
   for(const l of lvls){
-    s += `<line x1="${legFrom.toFixed(1)}" y1="${y(l.v).toFixed(1)}" x2="${W-R}" y2="${y(l.v).toFixed(1)}"
-           stroke="${l.c}" stroke-width="1" ${l.d?'stroke-dasharray="3 3"':''}/>`;
+    out += `<line x1="${legFrom.toFixed(1)}" y1="${y(l.v).toFixed(1)}" x2="${W-R}" y2="${y(l.v).toFixed(1)}"
+             stroke="${l.c}" stroke-width="1" ${l.d?'stroke-dasharray="3 3"':''}/>`;
   }
-
-  // Kerzen
-  const bw = Math.max(1, Math.min(6, cw*0.62));
+  const bw = Math.max(1, Math.min(7, cw*0.62));
   for(let i=0;i<bars.length;i++){
-    const k = bars[i], up = k.c >= k.o;
-    const col = up ? 'var(--long)' : 'var(--short)';
-    const xx = cx(i);
-    s += `<line x1="${xx.toFixed(1)}" y1="${y(k.h).toFixed(1)}" x2="${xx.toFixed(1)}" y2="${y(k.l).toFixed(1)}"
-           stroke="${col}" stroke-width=".8" opacity=".85"/>`;
+    const k = bars[i], col = k.c >= k.o ? 'var(--long)' : 'var(--short)', xx = cx(i);
+    out += `<line x1="${xx.toFixed(1)}" y1="${y(k.h).toFixed(1)}" x2="${xx.toFixed(1)}" y2="${y(k.l).toFixed(1)}"
+             stroke="${col}" stroke-width=".8" opacity=".85"/>`;
     const yo = y(k.o), yc = y(k.c);
-    s += `<rect x="${(xx-bw/2).toFixed(1)}" y="${Math.min(yo,yc).toFixed(1)}" width="${bw.toFixed(1)}"
-           height="${Math.max(0.8, Math.abs(yc-yo)).toFixed(1)}" fill="${col}" opacity=".9"/>`;
+    out += `<rect x="${(xx-bw/2).toFixed(1)}" y="${Math.min(yo,yc).toFixed(1)}" width="${bw.toFixed(1)}"
+             height="${Math.max(0.8, Math.abs(yc-yo)).toFixed(1)}" fill="${col}" opacity=".9"/>`;
   }
-
-  // Das Leg selbst: A → B
-  s += `<line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}"
-         stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="4 3" opacity=".65"/>`;
-  const mark = (px, py, lab, sub) => {
+  if(vis(ai) && vis(bi)){
+    out += `<line x1="${cx(ai).toFixed(1)}" y1="${y(x.A.p).toFixed(1)}" x2="${cx(bi).toFixed(1)}"
+             y2="${y(x.B.p).toFixed(1)}" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="4 3" opacity=".65"/>`;
+  }
+  const mark = (i, pv, lab, sub) => {
+    if(!vis(i)) return '';
+    const px = cx(i), py = y(pv);
     const above = lab === 'B' ? (x.dir === 'long') : (x.dir !== 'long');
-    const ty = above ? py - 8 : py + 13;
     return `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.4" fill="var(--abyss)"
               stroke="var(--ink)" stroke-width="1.4"/>
-            <text x="${px.toFixed(1)}" y="${ty.toFixed(1)}" font-size="9" fill="var(--ink)"
+            <text x="${px.toFixed(1)}" y="${(above ? py-8 : py+13).toFixed(1)}" font-size="9" fill="var(--ink)"
               text-anchor="middle" font-family="ui-monospace,monospace">${lab} ${sub}</text>`;
   };
-  s += mark(ax, ay, 'A', '1.0');
-  s += mark(bx, by, 'B', '0');
+  out += mark(ai, x.A.p, 'A', '1.0') + mark(bi, x.B.p, 'B', '0');
 
-  // Aktueller Preis
-  const px = cx(bars.length-1), py = y(bars[bars.length-1].c);
-  s += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="var(--ink)"/>`;
+  const atEnd = v.i0 + v.n >= all.length;
+  const py = y(bars[bars.length-1].c);
+  if(atEnd) out += `<circle cx="${cx(bars.length-1).toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="var(--ink)"/>`;
 
-  // Labels rechts entzerren
-  const labs = lvls.map(l => ({t:l.t, y:y(l.v), c:l.c==='#33456a' ? '#6b7a92' : l.c}))
-                   .concat([{t:'jetzt', y:py, c:'var(--ink)'}])
-                   .sort((a,b)=>a.y-b.y);
-  const GAP = 10;
-  for(let i=1;i<labs.length;i++) if(labs[i].y - labs[i-1].y < GAP) labs[i].y = labs[i-1].y + GAP;
+  const labs = lvls.map(l => ({t:l.t, y:y(l.v), c:l.c==='#33456a' ? '#6b7a92' : l.c}));
+  if(atEnd) labs.push({t:'jetzt', y:py, c:'var(--ink)'});
+  labs.sort((a,b)=>a.y-b.y);
+  for(let i=1;i<labs.length;i++) if(labs[i].y - labs[i-1].y < 10) labs[i].y = labs[i-1].y + 10;
   const over = labs[labs.length-1].y - (H-2);
   if(over > 0) for(const l of labs) l.y -= over;
   for(const l of labs){
-    s += `<text x="${W-R+4}" y="${(l.y+3).toFixed(1)}" font-size="8.5" fill="${l.c}"
-           font-family="ui-monospace,monospace">${l.t}</text>`;
+    out += `<text x="${W-R+4}" y="${(l.y+3).toFixed(1)}" font-size="8.5" fill="${l.c}"
+             font-family="ui-monospace,monospace">${l.t}</text>`;
   }
+  out += `</svg>`;
+  out += `<div class="chartctl">
+      <button data-cv="left" data-id="${id}">◀</button>
+      <button data-cv="right" data-id="${id}">▶</button>
+      <button data-cv="out" data-id="${id}">−</button>
+      <button data-cv="in" data-id="${id}">+</button>
+      <button data-cv="reset" data-id="${id}">Reset</button>
+    </div>
+    <div class="sparkcap">A = Leg-Start (1.0) · B = Leg-Ende (0) · Bars ${v.i0+1}–${v.i0+v.n} von ${all.length}${fct>1?' · je '+fct+' zusammengefasst':''}</div>`;
+  return out;
+}
 
-  s += `</svg><div class="sparkcap">A = Leg-Start (1.0) · B = Leg-Ende (0) · ${bars.length} Kerzen ${x.tf}</div>`;
-  return s;
+function redrawChart(id){
+  const card = document.querySelector('.card[data-id="'+id+'"]');
+  const hold = card && card.querySelector('.chartholder');
+  const x = DATA.find(d => d.sym+'-'+d.tf === id);
+  if(hold && x){ hold.innerHTML = spark(x, id); bindPan(hold, id); }
+}
+
+function bindPan(hold, id){
+  let sx = 0, si = 0, sd = 0, sn = 0;
+  const dist = t => Math.abs(t[0].clientX - t[1].clientX) + Math.abs(t[0].clientY - t[1].clientY);
+  hold.addEventListener('touchstart', e => {
+    const v = VIEWS[id]; if(!v) return;
+    si = v.i0; sn = v.n;
+    if(e.touches.length === 2){ sd = dist(e.touches); }
+    else { sx = e.touches[0].clientX; sd = 0; }
+  }, {passive:true});
+  hold.addEventListener('touchmove', e => {
+    const v = VIEWS[id]; if(!v) return;
+    if(e.touches.length === 2 && sd > 0){
+      const f = dist(e.touches) / sd;
+      v.n = sn / f;                                   // aufziehen = reinzoomen
+      v.i0 = si + (sn - v.n)/2;
+    } else {
+      const perBar = hold.clientWidth / v.n;
+      v.i0 = si - (e.touches[0].clientX - sx) / perBar;
+    }
+    e.preventDefault();
+    redrawChart(id);
+  }, {passive:false});
+}
+
+function tvHref(sym){
+  const q = encodeURIComponent('BINANCE:' + sym + '.P');
+  return S.tv === 'app'
+    ? 'tradingview://chart?symbol=' + q
+    : 'https://www.tradingview.com/chart/?symbol=' + q;
 }
 
 function divTag(d){
@@ -1005,20 +1035,18 @@ function card(x, id){
       <div class="detail">
         <table>
           <tr><td>Leg (${x.dir==='long'?'Tief → Hoch':'Hoch → Tief'}) · ${x.legBars} Bars</td><td>${f(x.A.p)} → ${f(x.B.p)}</td></tr>
-          <tr><td>Leg-Ende</td><td>vor ${x.endAge} Bars</td></tr>
           <tr><td>tiefstes Retracement bisher</td><td>${(x.deep*100).toFixed(1)}%</td></tr>
           ${x.entries.map(e=>`<tr><td>Entry ${e.toFixed(3)}</td><td>${f(x.fib(e))}</td></tr>`).join('')}
           <tr><td>Stop (${x.invalidLvl} +${S.buf}%)</td><td style="color:var(--short)">${f(x.stop)}</td></tr>
           <tr><td>Risiko je Coin</td><td>${f(x.risk)}</td></tr>
           ${x.tgts.map(t=>`<tr><td>${t.l}</td><td>${f(t.p)} · RR ${t.rr.toFixed(1)}</td></tr>`).join('')}
           <tr><td>Größe bei ${S.risk}% von ${S.acc}</td><td>${qty(size)} ${x.name} · ${notional.toFixed(0)} USDT</td></tr>
-          <tr><td>nötiger Hebel</td><td${lev>10?' style="color:var(--short)"':''}>${lev.toFixed(1)}x</td></tr>
           <tr><td>Stop-Distanz</td><td>${riskPct.toFixed(2)}% vom Entry</td></tr>
         </table>
-        <div class="chartholder">${open ? spark(x) : ''}</div>
+        <div class="chartholder">${open ? spark(x, id) : ''}</div>
         <div class="acts">
-          <button class="tvopen" data-tv="${id}">Chart</button>
-          <button class="copy" data-id="${id}">Kopieren</button>
+          <a href="${tvHref(x.sym)}">TradingView</a>
+          <button class="copy" data-id="${id}">Setup kopieren</button>
         </div>
       </div>
     </div>
@@ -1057,41 +1085,6 @@ function render(){
 /* ============================================================
    Interaktion
    ============================================================ */
-let ovlSym = null;
-function openChart(x){
-  ovlSym = x;
-  document.getElementById('ovltitle').textContent = `${x.name} · ${x.tf} · ${x.dir==='long'?'LONG':'SHORT'}`;
-  document.getElementById('ovl').classList.add('on');
-  const box = document.getElementById('tvbox');
-  box.innerHTML = '<div class="note">lade TradingView …</div>';
-  const wrap = document.createElement('div');
-  wrap.className = 'tradingview-widget-container';
-  const inner = document.createElement('div');
-  inner.className = 'tradingview-widget-container__widget';
-  wrap.appendChild(inner);
-  const sc = document.createElement('script');
-  sc.type = 'text/javascript';
-  sc.async = true;
-  sc.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  sc.innerHTML = JSON.stringify({
-    symbol: 'BINANCE:' + x.sym + '.P',
-    interval: ({'15m':'15','30m':'30','1h':'60','4h':'240'})[x.tf] || '60',
-    theme: 'dark', style: '1', locale: 'de_DE',
-    autosize: true, hide_side_toolbar: false, allow_symbol_change: true,
-    backgroundColor: '#070b14'
-  });
-  sc.onerror = () => {
-    box.innerHTML = '<div class="note">TradingView lädt nicht (Netz oder Blocker).<br>' +
-      '<a href="' + tvHref(x.sym) + '" style="color:var(--zone)">im Browser öffnen</a></div>';
-  };
-  setTimeout(() => { box.innerHTML = ''; box.appendChild(wrap); wrap.appendChild(sc); }, 40);
-}
-function closeChart(){
-  document.getElementById('ovl').classList.remove('on');
-  document.getElementById('tvbox').innerHTML = '';
-  ovlSym = null;
-}
-
 function buildTFBar(){
   document.getElementById('tfbar').innerHTML = ALL_TF.map(tf =>
     `<button class="chip tf-chip${S.tfs.includes(tf)?' on':''}" data-tf="${tf}">${tf}</button>`).join('');
@@ -1153,17 +1146,22 @@ document.addEventListener('click', e => {
   const ax = e.target.closest('[data-alarm]');
   if(ax){ ALARMS.splice(+ax.dataset.alarm, 1); renderAlarms(); return; }
 
-  if(e.target.id === 'ovlclose'){ closeChart(); return; }
-  if(e.target.id === 'ovlapp'){
-    if(ovlSym) location.href = 'tradingview://chart?symbol=' + encodeURIComponent('BINANCE:'+ovlSym.sym+'.P');
+  const cv = e.target.closest('[data-cv]');
+  if(cv){
+    const id = cv.dataset.id, v = VIEWS[id];
+    const x = DATA.find(d => d.sym+'-'+d.tf === id);
+    if(v && x){
+      const step = Math.max(1, Math.round(v.n*0.28));
+      if(cv.dataset.cv === 'left')  v.i0 -= step;
+      if(cv.dataset.cv === 'right') v.i0 += step;
+      if(cv.dataset.cv === 'in')    { v.i0 += v.n*0.2; v.n *= 0.6; }
+      if(cv.dataset.cv === 'out')   { v.i0 -= v.n*0.33; v.n /= 0.6; }
+      if(cv.dataset.cv === 'reset') { v.i0 = 0; v.n = (x.pc||[]).length; }
+      redrawChart(id);
+    }
     return;
   }
-  const tvb = e.target.closest('[data-tv]');
-  if(tvb){
-    const x = DATA.find(d => d.sym+'-'+d.tf === tvb.dataset.tv);
-    if(x) openChart(x);
-    return;
-  }
+  if(e.target.closest('.chartholder')) return;   // Chart bedienen klappt die Karte nicht zu
 
   const cp = e.target.closest('.copy');
   if(cp){
@@ -1179,7 +1177,7 @@ document.addEventListener('click', e => {
     const hold = c.querySelector('.chartholder');
     if(hold && !hold.innerHTML && c.classList.contains('open')){
       const x = DATA.find(d => d.sym+'-'+d.tf === id);
-      if(x) hold.innerHTML = spark(x);
+      if(x){ hold.innerHTML = spark(x, id); bindPan(hold, id); }
     }
   }
 });
