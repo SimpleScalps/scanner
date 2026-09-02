@@ -45,6 +45,7 @@
     margin:0;font-size:13px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
   }
   .brand .sub{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+  .brand .ver{font-size:10px;color:var(--zone);margin-left:auto;font-family:var(--mono)}
   .statusline{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:11px;color:var(--muted)}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--long);flex:none}
   .dot.err{background:var(--short)}
@@ -170,7 +171,7 @@
 
 <header>
   <div class="brand">
-    <h1>SimpleScalps</h1><span class="sub">Discount Scanner</span>
+    <h1>SimpleScalps</h1><span class="sub">Discount Scanner</span><span class="ver" id="ver"></span>
   </div>
   <div class="statusline">
     <span class="dot load" id="dot"></span>
@@ -281,6 +282,8 @@
 /* ============================================================
    Konfiguration
    ============================================================ */
+const VERSION = 'v6 · 02.09.';
+
 const SYMBOLS = [
   {s:'BTCUSDT', n:'BTC'},
   {s:'ETHUSDT', n:'ETH'},
@@ -327,6 +330,7 @@ let timer = null, loading = false;
    ============================================================ */
 const jsoff = document.getElementById('jsoff');
 if(jsoff) jsoff.remove();
+document.getElementById('ver').textContent = VERSION;
 setStatus('load','Script läuft · verbinde …');
 document.getElementById('out').innerHTML = '<div class="note">Lade Kerzen …</div>';
 
@@ -852,15 +856,24 @@ function spark(x){
   for(const l of lvls){
     s += `<line x1="${PL}" y1="${y(l.v).toFixed(1)}" x2="${W-R}" y2="${y(l.v).toFixed(1)}"
            stroke="${l.c}" stroke-width="1" ${l.d?'stroke-dasharray="3 3"':''}/>`;
-    s += `<text x="${W-R+4}" y="${(y(l.v)+3).toFixed(1)}" font-size="8.5"
-           fill="${l.c==='#33456a'?'#6b7a92':l.c}" font-family="ui-monospace,monospace">${l.t}</text>`;
   }
   s += `<polyline points="${p.map((v,i)=>xs(i).toFixed(1)+','+y(v).toFixed(1)).join(' ')}"
          fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;
   const cx = xs(p.length-1), cy = y(p[p.length-1]);
   s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="var(--ink)"/>`;
-  s += `<text x="${W-R+4}" y="${(cy+3).toFixed(1)}" font-size="8.5" fill="var(--ink)"
-         font-family="ui-monospace,monospace">jetzt</text>`;
+
+  // Labels vertikal entzerren, damit sich Level und "jetzt" nicht überschreiben
+  const labs = lvls.map(l => ({t:l.t, y:y(l.v), c:l.c==='#33456a' ? '#6b7a92' : l.c}))
+                   .concat([{t:'jetzt', y:cy, c:'var(--ink)'}])
+                   .sort((a,b)=>a.y-b.y);
+  const GAP = 10;
+  for(let i=1;i<labs.length;i++) if(labs[i].y - labs[i-1].y < GAP) labs[i].y = labs[i-1].y + GAP;
+  const over = labs[labs.length-1].y - (H-2);
+  if(over > 0) for(const l of labs) l.y -= over;
+  for(const l of labs){
+    s += `<text x="${W-R+4}" y="${(l.y+3).toFixed(1)}" font-size="8.5" fill="${l.c}"
+           font-family="ui-monospace,monospace">${l.t}</text>`;
+  }
   s += `</svg><div class="sparkcap">Verlauf ab Leg-Start · ${p.length} Bars ${x.tf}</div>`;
   return s;
 }
