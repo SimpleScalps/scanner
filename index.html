@@ -121,6 +121,8 @@
   .pill{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 8px;border-radius:999px;background:var(--deck2);color:var(--muted)}
   .pill.zone{background:var(--zone);color:#241700}
   .pill.near{background:rgba(255,176,32,.18);color:var(--zone)}
+  .pill.triggered{background:rgba(34,211,168,.16);color:var(--long)}
+  .card.triggered{border-color:rgba(34,211,168,.45)}
   .star{background:none;border:0;color:var(--dim);font-size:19px;padding:0 2px;line-height:1;font-family:var(--sans)}
   .star.on{color:var(--zone)}
   .card.watched{border-left:3px solid var(--zone)}
@@ -572,6 +574,13 @@ function analyze(sym, name, tf, c){
   // Welches Bein trägt die Fibs? Unter den letzten Beinen das größte, das
   // noch intakt ist – der Preis darf 1.0 nicht gerissen und 0.0 nicht
   // überboten haben. So gewinnt der dominante Swing gegen Mikro-Zacken.
+  // Extremwerte ab jedem Bar bis zum Ende – für "was ist seit dem Leg passiert?"
+  const sufLow = new Array(c.length), sufHigh = new Array(c.length);
+  for(let i=c.length-1, ml=Infinity, mh=-Infinity; i>=0; i--){
+    ml = Math.min(ml, c[i].l); mh = Math.max(mh, c[i].h);
+    sufLow[i] = ml; sufHigh[i] = mh;
+  }
+
   const n = pts.length;
   const invalidLvl0 = S.mode === 'scaled' ? 1.27 : 1.0;
   const minBar = c.length - Math.max(40, Math.round(S.lookback));
@@ -589,7 +598,12 @@ function analyze(sym, name, tf, c){
     const dr = b.type === 'H' ? 'long' : 'short';
     const rr0 = dr === 'long' ? (b.p - price)/rg : (price - b.p)/rg;
     if(rr0 < 0 || rr0 > invalidLvl0) continue;
-    if(!pick || rg > pick.rg) pick = {a, b, rg};
+    // Wie tief lief das Retracement seit dem Leg-Ende schon?
+    const j = Math.min(b.i + 1, last);
+    const deep = dr === 'long' ? (b.p - sufLow[j])/rg : (sufHigh[j] - b.p)/rg;
+    if(deep > invalidLvl0) continue;                   // Stop war hit → Bein tot
+    if(deep >= 0.882 && rr0 < 0.786) continue;         // Entry war hit, Zone verlassen → verbraucht
+    if(!pick || rg > pick.rg) pick = {a, b, rg, deep};
   }
   if(!pick) return Object.assign(base, {status:'none'});
   const A = pick.a, B = pick.b;
@@ -618,17 +632,22 @@ function analyze(sym, name, tf, c){
 
   const distPct = (entry - price)/price*100;      // <0 = Entry liegt unter dem Preis
   const absDist = Math.abs(distPct);
+  const deep = pick.deep;
   let status;
   if(r > invalidLvl + 0.001) status = 'invalid';
+  else if(deep >= 0.882) status = 'triggered';    // 0.882 war schon dran
   else if(r < 0.02) status = 'extend';
   else if(absDist <= S.tol) status = 'zone';
   else if(absDist <= S.tol*4 || (r >= 0.7 && r <= invalidLvl)) status = 'near';
   else if(r >= 0.382) status = 'watch';
   else status = 'idle';
 
-  const conf = divs.filter(d => d.side === dir);
+  // Konfluenz zählt nur, was im laufenden Retracement entstanden ist –
+  // eine Divergenz von vor dem Leg-Ende gehört zu einer anderen Bewegung
+  divs.forEach(d => { d.inRetr = d.age <= endAge + 2; });
+  const conf = divs.filter(d => d.side === dir && d.inRetr);
   return Object.assign(base, {
-    dir, A, B, range, legPct, legBars, endAge, r, fib, entries, entry, stop, risk, tgts,
+    dir, A, B, range, legPct, legBars, endAge, deep, r, fib, entries, entry, stop, risk, tgts,
     distPct, absDist, status, invalidLvl, conf, scaled
   });
 }
@@ -668,6 +687,7 @@ async function scan(){
   }
 
   DATA = results;
+  crossLink();
   buildTape();
   const t = new Date();
   setStatus(errors.length ? 'err' : 'ok',
@@ -676,6 +696,17 @@ async function scan(){
   render();
   checkAlarms();
   loading = false;
+}
+
+function crossLink(){
+  // Divergenzen der anderen Timeframes desselben Paars als MTF-Konfluenz
+  for(const x of DATA){
+    if(!x.dir){ x.mtf = []; continue; }
+    x.mtf = DATA
+      .filter(y => y.sym === x.sym && y.tf !== x.tf && y.divs)
+      .flatMap(y => y.divs.filter(d => d.side === x.dir && d.age <= 12)
+                          .map(d => Object.assign({}, d, {tf:y.tf, inRetr:true})));
+  }
 }
 
 function buildTape(){
@@ -729,7 +760,7 @@ function checkAlarms(){
     if(!x.dir) continue;
     const id = x.sym + '-' + x.tf;
     if(!WATCH.has(id)) continue;
-    const key = id + '@' + x.B.p.toFixed(4);        // neues Leg = neuer Alarm
+    const key = id + '@' + x.A.p.toFixed(6) + '/' + x.B.p.toFixed(6);        // neues Leg = neuer Alarm
     if(x.r >= S.alarmLvl && x.r <= x.invalidLvl && !FIRED.has(key)){
       FIRED.add(key);
       fireAlarm(x);
@@ -742,10 +773,10 @@ function renderAlarms(){
       <button class="x" data-alarm="${i}">✕</button></div>`).join('');
 }
 
-const ORDER = {zone:0, near:1, watch:2, idle:3, extend:4, invalid:5, none:6};
+const ORDER = {zone:0, triggered:1, near:2, watch:3, idle:4, extend:5, invalid:6, none:7};
 function rank(x){
   const base = (ORDER[x.status] ?? 9) * 1000;
-  const conf = x.conf && x.conf.length ? -60 : 0;
+  const conf = ((x.conf && x.conf.length) || (x.mtf && x.mtf.length)) ? -60 : 0;
   const wl = WATCH.has(x.sym + '-' + x.tf) ? -400 : 0;
   return base + Math.min(999, (x.absDist ?? 999) * 10) + conf + wl;
 }
@@ -753,7 +784,8 @@ function rank(x){
 /* ============================================================
    Rendering
    ============================================================ */
-function dec(p){ return p >= 1000 ? 1 : p >= 100 ? 2 : p >= 1 ? 3 : 5; }
+function dec(p){ return p >= 1000 ? 1 : p >= 100 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.1 ? 5 : 6; }
+function qty(v){ return v >= 1000 ? v.toFixed(0) : v >= 10 ? v.toFixed(2) : v.toFixed(4); }
 function f(p){ return p==null||isNaN(p) ? '–' : p.toLocaleString('de-DE',{minimumFractionDigits:dec(p), maximumFractionDigits:dec(p)}); }
 function pct(x, d=2){ return (x>0?'+':'') + x.toFixed(d) + ' %'; }
 
@@ -763,7 +795,7 @@ function setStatus(kind, txt){
 }
 
 const LABEL = {
-  zone:'IM LEVEL', near:'KURZ DAVOR', watch:'IM RÜCKLAUF', idle:'NOCH WEIT',
+  zone:'IM LEVEL', triggered:'ENTRY WAR DA', near:'KURZ DAVOR', watch:'IM RÜCKLAUF', idle:'NOCH WEIT',
   extend:'LEG LÄUFT', invalid:'GERISSEN', none:'KEINE STRUKTUR'
 };
 
@@ -786,7 +818,11 @@ function gauge(x){
     h += `<div class="rung${key?' key':''}" style="top:${y(rg)}%"></div>`;
     if(key) h += `<div class="rlab" style="top:${y(rg)}%">${rg.toFixed(rg===0.882?3:2)}</div>`;
   }
-  h += `<div class="now" style="top:${yNow}%"></div></div>`;
+  h += `<div class="now" style="top:${yNow}%"></div>`;
+  if(x.deep > x.r + 0.02){
+    h += `<div class="rung" style="top:${y(x.deep)}%;background:#8a94ab;left:6px;width:23px"></div>`;
+  }
+  h += `</div>`;
   return h;
 }
 
@@ -837,9 +873,11 @@ function tvHref(sym){
 }
 
 function divTag(d){
+  if(d.inRetr === false) return `<span class="tag" style="opacity:.55">${d.osc} ${d.hidden?'hidden':'reg'} ${d.side==='long'?'↑':'↓'} · vor Leg-Ende</span>`;
   const dir = d.side==='long' ? 'bull' : 'bear';
   const arrow = d.side==='long' ? '↑' : '↓';
-  return `<span class="tag ${dir}">${d.osc} ${d.hidden?'hidden':'reg'} ${arrow} · vor ${d.age} Bars</span>`;
+  const tf = d.tf ? d.tf + ' ' : '';
+  return `<span class="tag ${dir}">${tf}${d.osc} ${d.hidden?'hidden':'reg'} ${arrow} · vor ${d.age} Bars</span>`;
 }
 
 function card(x, id){
@@ -853,9 +891,10 @@ function card(x, id){
   }
   const size = (S.acc * S.risk/100) / (x.risk || 1);
   const notional = size * x.entry;
+  const riskPct = x.risk / x.entry * 100;
+  const lev = notional / (S.acc || 1);
   const arrow = x.distPct > 0 ? '↑' : '↓';
   const open = openCards.has(id) ? ' open' : '';
-  const rr = x.tgts[0].rr;
   const watched = WATCH.has(id);
 
   return `<div class="card ${x.status}${open}${watched?' watched':''}" data-id="${id}">
@@ -875,22 +914,26 @@ function card(x, id){
         <div><span class="lbl">Abstand</span><span class="num big">${arrow} ${x.absDist.toFixed(2)}%</span></div>
         <div><span class="lbl">Retr.</span><span class="num">${(x.r*100).toFixed(1)}%</span></div>
         <div><span class="lbl">Leg</span><span class="num">${x.legPct.toFixed(2)}%</span></div>
-        <div><span class="lbl">RR T1</span><span class="num">${rr.toFixed(1)}</span></div>
+        <div><span class="lbl">Risiko</span><span class="num"${riskPct<0.15?' style="color:var(--short)"':''}>${riskPct.toFixed(2)}%</span></div>
       </div>
       <div class="tags">
-        ${x.conf.length ? '<span class="tag '+(x.dir==='long'?'bull':'bear')+'">KONFLUENZ</span>' : ''}
+        ${(x.conf.length || (x.mtf||[]).length) ? '<span class="tag '+(x.dir==='long'?'bull':'bear')+'">KONFLUENZ'+((x.mtf||[]).length?' MTF':'')+'</span>' : ''}
         ${x.divs.map(divTag).join('')}
-        ${x.divs.length===0 ? '<span class="tag">keine Divergenz</span>' : ''}
+        ${(x.mtf||[]).map(divTag).join('')}
+        ${x.divs.length===0 && !(x.mtf||[]).length ? '<span class="tag">keine Divergenz</span>' : ''}
       </div>
       <div class="detail">
         <table>
           <tr><td>Leg (${x.dir==='long'?'Tief → Hoch':'Hoch → Tief'}) · ${x.legBars} Bars</td><td>${f(x.A.p)} → ${f(x.B.p)}</td></tr>
           <tr><td>Leg-Ende</td><td>vor ${x.endAge} Bars</td></tr>
+          <tr><td>tiefstes Retracement bisher</td><td>${(x.deep*100).toFixed(1)}%</td></tr>
           ${x.entries.map(e=>`<tr><td>Entry ${e.toFixed(3)}</td><td>${f(x.fib(e))}</td></tr>`).join('')}
           <tr><td>Stop (${x.invalidLvl} +${S.buf}%)</td><td style="color:var(--short)">${f(x.stop)}</td></tr>
           <tr><td>Risiko je Coin</td><td>${f(x.risk)}</td></tr>
           ${x.tgts.map(t=>`<tr><td>${t.l}</td><td>${f(t.p)} · RR ${t.rr.toFixed(1)}</td></tr>`).join('')}
-          <tr><td>Größe bei ${S.risk}% von ${S.acc}</td><td>${size.toFixed(dec(x.price)>3?1:3)} ${x.name} · ${notional.toFixed(0)} USDT</td></tr>
+          <tr><td>Größe bei ${S.risk}% von ${S.acc}</td><td>${qty(size)} ${x.name} · ${notional.toFixed(0)} USDT</td></tr>
+          <tr><td>nötiger Hebel</td><td${lev>10?' style="color:var(--short)"':''}>${lev.toFixed(1)}x</td></tr>
+          <tr><td>Stop-Distanz</td><td>${riskPct.toFixed(2)}% vom Entry</td></tr>
         </table>
         ${spark(x)}
         <div class="acts">
@@ -1014,7 +1057,8 @@ function copySetup(x, btn){
     `${x.sym}.P · ${x.dir.toUpperCase()} · ${x.tf}`,
     `Leg ${f(x.A.p)} → ${f(x.B.p)} | Retr ${(x.r*100).toFixed(1)}%`,
     ...x.entries.map(e=>`Entry ${e.toFixed(3)}: ${f(x.fib(e))}`),
-    `Stop (${x.invalidLvl}+${S.buf}%): ${f(x.stop)}`,
+    `Stop (${x.invalidLvl}+${S.buf}%): ${f(x.stop)} · ${(x.risk/x.entry*100).toFixed(2)}% Risiko`,
+    `Leg-Ende vor ${x.endAge} Bars · tiefstes Retr ${(x.deep*100).toFixed(1)}%`,
     ...x.tgts.map(t=>`${t.l}: ${f(t.p)} (RR ${t.rr.toFixed(1)})`),
     x.divs.length ? 'Div: ' + x.divs.map(d=>`${d.osc} ${d.side} ${d.hidden?'hidden':'reg'}`).join(', ') : 'Div: keine'
   ].join('\n');
@@ -1052,6 +1096,7 @@ function reanalyze(){
     const meta = SYMBOLS.find(s => s.s === sym);
     return analyze(sym, meta.n, tf, CACHE[k]);
   });
+  crossLink();
   buildTape();
   render();
 }
